@@ -1,0 +1,163 @@
+#!/bin/bash
+# Spam Checker and Exim Adjuster by Nick Crain, with tons of scripts that I stole from Pete Martinez.
+# Forced Color removed, you're welcome Dan Uber...and Clamscan integration added.
+##
+show_menu(){
+    echo -e "***************Wiredtree Exim Settings and Spam Check*************"
+    echo -e "** 1) VPS Exim Settings"
+    echo -e "** 2) Hybrid Exim Settings"
+    echo -e "** 3) Dedicated Exim Settings "
+    echo -e "** 4) Clamscan "
+    echo -e "** 5) Spamcheck "
+    echo -e "************************Script by Nicholas Crain******************"
+    echo -e "*******************Backend Scripts by Pete Martinez***************"
+    echo -e "Please choose a number and hit enter or just hit enter to exit."
+    export clams=$(cd /root/ ; curl --silent -O http://files.wiredtree.com/misc/clamscan.sh ; chmod +x /root/clamscan.sh;);
+    read opt
+}
+function option_picked() {
+    COLOR='\033[01;31m' # bold red
+    RESET='\033[00;00m' # normal white
+    MESSAGE=${@:-"${RESET}Error: No message passed"}
+    echo -e "${COLOR}${MESSAGE}${RESET}"
+}
+show_subs(){
+  echo -e "1) Clear Bouncebacks?"
+  echo -e "2) Archive Spamming Files?"
+  echo -e "3) Clear Outbound File Spam?"
+  echo -e "4) Generate Ticket?"
+  echo -e "5) Start Clamscan?"
+  echo -e "   Hit Enter To Exit"
+  read subopt
+}
+clear
+show_menu
+while [ opt != '' ]
+    do
+    if [[ $opt = "" ]]; then
+            exit;
+    else
+        case $opt in
+	1) clear;
+        	option_picked "VPS Exim Settings";
+        touch /etc/eximdisable;
+        service exim stop ;
+        sleep 5;
+        sed -i 's/deliver_queue_load_max.*/deliver_queue_load_max=4/;s/queue_only_load.*/queue_only_load=4/;' /etc/exim.conf ;
+        sleep 5 ;
+        rm -f /etc/eximdisable ;
+        service exim restart ;
+        sleep 5 ;
+        show_menu;
+        ;;
+
+        2) clear;
+            option_picked "Hybrid Exim Settings";
+        touch /etc/eximdisable;
+        service exim stop ;
+        sed -i 's/deliver_queue_load_max.*/deliver_queue_load_max=8/;s/queue_only_load.*/queue_only_load=8/;' /etc/exim.conf ; sleep 5 ; rm -f /etc/eximdisable ; service exim restart
+        show_menu;
+            ;;
+
+        3) clear;
+            option_picked "Dedicated Exim Settings";
+	touch /etc/eximdisable;
+        service exim stop ;
+        sed -i 's/deliver_queue_load_max.*/deliver_queue_load_max=12/;s/queue_only_load.*/queue_only_load=12/;' /etc/exim.conf ; sleep 5 ; rm -f /etc/eximdisable ; service exim restart
+        show_menu;
+            ;;
+	4) clear;
+	option_picked "Clamscan";
+                echo; echo -e "Starting Clamscan..."
+                $clams
+		/root/clamscan.sh ;
+                echo;
+                show_subs;
+		;;
+        5) clear;
+            option_picked "Spam Check";
+                echo "Checking Exim Logs"
+		            export spamdata=$(cat /var/log/exim_mainlog | tee >(grep 'dovecot_login' | awk -F 'dovecot_login:' '{print $2}' | awk -F ' ' '{print $1}' | grep -v '^$' | sort | uniq -c | sort -nr | head -n 40) >( grep 'cwd=.*public_html' | awk '{print $3}' | sort | uniq -c | sort -nr | egrep [0-9]{4}' ')  >/dev/null) ;	
+		            export spamsources=$(echo "$spamdata" | grep cwd);
+		            export spammers=$(echo "$spamdata" | grep \@);
+		            echo; echo "Done" ;
+		            echo; echo "Queued Messages" ;
+                echo; export o_spam=$(exim -bpc) ;echo "$o_spam"
+                echo; echo "Responsible Party" ;
+                echo "$spammers" ;
+                echo; echo "How many are Bouncebacks?" ;
+                exiqgrep -i -f '<>'|wc -l ;
+	            	echo; echo "Messages Sent Recently"; 
+                echo; exiqgrep -f $spammers | uniq -c | wc -l ;
+                echo; echo "File locations"; 
+                echo "$spamsources";
+                echo; echo "Files Spamming";
+		rpm -qa | grep wt-parallel || rpm -i http://updates-vps.wiredtree.com/centos/4/wt-extra//noarch/wt-parallel-20141122-1.noarch.rpm | grep -v wt-parallel; 
+                export spamscripts=$(echo "$spamsources" | parallel --no-notice -k "bash <(curl -s -L files.wiredtree.com/spam/php-sources.sh)" | grep ^.home | sort | uniq); echo "$spamscripts"
+		echo; echo "File Information";
+		export spamstats=$(echo "spam-statinfo".$(date +%Y.%m.%d_%H-%M));
+		echo; echo "Stat Information Backed up to /root/$spamstats";
+		echo; stat $spamscripts >> /root/$spamstats;
+		echo; cat $spamstats;
+		echo;
+                show_subs
+    while [ subopt != '' ]
+    do if [[ subopt = "" ]]; then 
+      show_menu;
+    else
+        case $subopt in
+                
+          1)    echo; echo -e "Removing Bounce Backs" ;
+			          echo; echo; exiqgrep -i -f '<>' | parallel -X -j2 --no-notice exim -Mrm {}; echo "Bounce Backs Removed."; echo; echo;
+	              show_subs;
+                ;;
+                
+			    2)    echo; echo -e "Backing up and overwritting files";
+			          export spamarchive=$(echo "spam".$(date +%Y.%m.%d_%H-%M)".tar.gz") ; echo; echo; echo "Backed up to /root/abuse/$spamarchive";
+			          mkdir -p /root/abuse/
+			          echo; echo; echo "$spamscripts" | tar zcvf /root/abuse/$spamarchive -T - ; sleep 2; echo; echo;
+				  echo "Files Overwritten";
+				  export fakefile="\<?php sleep(20);";
+				  for file in $spamscripts; do echo '<?php sleep(20);' > $file; done; 
+                show_subs;
+                ;;
+          3)    echo; echo -e "Removing Outbound Spam"; exim -bp | grep \< | grep -f <(tar tf /root/abuse/$spamarchive  | awk -F '/' '{print $2}' | sort | uniq)  | awk '{print $3}' | grep -v \< | xargs exim -Mrm | wc -l
+                echo "Spamming Files removed or already gone."; echo; echo;
+		            show_subs;
+                ;;
+			          
+          4)    echo; echo "Outbound Spam Warning -- $HOSTNAME";
+                export n_spam=$(exim -bpc);
+			          echo; echo "Hello,"; echo; echo "Unfortunately, we have found your server to be sending spam. You had $o_spam messages in your exim queue. After clearing out bouncebacks and any spam sent by any scripts on the server you currently have $n_spam messages in your exim queue." ; echo; echo "The following if any email addresses are responsible for the spam:"; echo "$spammers"; echo; echo "The following files have been spamming and have been archived to /root/abuse/$spamarchive:"; echo; echo "$spamscripts"; echo; echo "Please ensure you update any and all passwords for your CMS(Content Management System)/cPanel/FTP/Email accounts, and ensure that your CMS installations are fully up to date including all themes and/or plugins regardless of whether or not you use them."; echo; echo;
+               show_subs;
+               ;;
+	  5)    echo; echo -e "Start clamscan"
+		$clams;
+		/root/clamscan.sh;
+		show_subs;
+		;;
+            x)exit;
+              ;;
+            \n)exit;
+              ;;
+            *)clear;
+              exit;
+		          ;;
+          esac
+        fi   
+      done
+              exit;
+            ;;
+        x)exit;
+        ;;
+
+        \n)exit;
+        ;;
+        *)clear;
+        option_picked "Pick an option from the menu";
+	show_menu;
+        ;;
+    esac
+fi
+done
+
